@@ -10,5 +10,6 @@ wheels/
 # Virtual environments
 .venv
 
-# Credentials
+# Credentials and user data
 credential.json
+rooms.json

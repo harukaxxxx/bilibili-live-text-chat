@@ -1,16 +1,19 @@
 import re
 import threading
-from bili_chat.bili_client import BiliClient
+from bili_chat.bili_client import BiliClient, save_room, load_rooms
 from bili_chat.ui import BiliChatUI
 
 
 class App:
     def __init__(self):
         self.client = BiliClient()
+        self.rooms = load_rooms()
+        self.current_url = None
         self.ui = BiliChatUI(
             on_connect=self.on_connect,
             on_send=self.on_send,
-            on_disconnect=self.on_disconnect
+            on_disconnect=self.on_disconnect,
+            rooms=self.rooms
         )
         self._poll_messages()
 
@@ -26,6 +29,11 @@ class App:
         except ValueError as e:
             self.ui.show_error(str(e))
             return
+        
+        self.current_url = url
+        save_room(url)
+        self.rooms = load_rooms()
+        self.ui.update_rooms(self.rooms)
         
         has_credential = self.client.load_credential()
         if has_credential:
@@ -62,6 +70,12 @@ class App:
             elif msg_type == "qr_done":
                 success = args[0]
                 self.ui.qr_login_done(success)
+            elif msg_type == "room_info":
+                room_id, room_title = args
+                if self.current_url:
+                    save_room(self.current_url, room_title)
+                    self.rooms = load_rooms()
+                    self.ui.update_rooms(self.rooms)
         
         if self.client.connected:
             self.ui.set_connected(True)
