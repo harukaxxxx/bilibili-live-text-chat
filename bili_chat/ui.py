@@ -38,12 +38,16 @@ class QRCodeDialog(ctk.CTkToplevel):
 
 
 class BiliChatUI:
+    MAX_LINES = 100
+
     def __init__(self, on_connect: Callable, on_send: Callable, on_disconnect: Callable, rooms: list = None):
         self.on_connect = on_connect
         self.on_send = on_send
         self.on_disconnect = on_disconnect
         self.rooms = rooms or []
         self.url_map = {f"{r['name']} ({r['url']})": r['url'] for r in self.rooms}
+        self._line_count = 0
+        self._is_connected = False
         
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
@@ -125,19 +129,37 @@ class BiliChatUI:
         self.msg_entry.delete(0, "end")
         self.on_send(msg)
 
+    MAX_LINES = 100
+
+    def _trim_display(self):
+        if self._line_count > self.MAX_LINES:
+            delete_count = self._line_count - self.MAX_LINES
+            self.chat_display.delete('1.0', f'{delete_count + 1}.0')
+            self._line_count = self.MAX_LINES
+
     def append_danmaku(self, uname: str, msg: str):
         self.chat_display.configure(state="normal")
         self.chat_display.insert("end", f"[{uname}]: {msg}\n")
+        self._line_count += 1
+        if self._line_count > self.MAX_LINES:
+            self._trim_display()
         self.chat_display.configure(state="disabled")
-        self.chat_display.see("end")
 
     def append_log(self, text: str):
         self.chat_display.configure(state="normal")
         self.chat_display.insert("end", f"[系統] {text}\n")
+        self._line_count += 1
+        if self._line_count > self.MAX_LINES:
+            self._trim_display()
         self.chat_display.configure(state="disabled")
+
+    def scroll_to_end(self):
         self.chat_display.see("end")
 
     def set_connected(self, connected: bool):
+        if self._is_connected == connected:
+            return
+        self._is_connected = connected
         if connected:
             self.connect_btn.configure(text="斷開", command=self._on_disconnect_click)
             self.send_btn.configure(state="normal")

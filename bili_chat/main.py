@@ -52,8 +52,10 @@ class App:
         self.ui.append_log("已斷開連接")
 
     def _poll_messages(self):
+        has_update = False
         while not self.client.msg_queue.empty():
             msg_type, *args = self.client.msg_queue.get()
+            has_update = True
             
             if msg_type == "danmaku":
                 uname, msg = args
@@ -77,10 +79,13 @@ class App:
                     self.rooms = load_rooms()
                     self.ui.update_rooms(self.rooms, self.current_url)
         
+        if has_update:
+            self.ui.scroll_to_end()
+        
         if self.client.connected:
             self.ui.set_connected(True)
         
-        self.ui.root.after(100, self._poll_messages)
+        self.ui.root.after(200, self._poll_messages)
 
 
 def main():
