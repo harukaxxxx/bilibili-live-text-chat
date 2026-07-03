@@ -1,6 +1,8 @@
 import asyncio
 import json
 import os
+import tempfile
+import threading
 from queue import Queue
 from typing import Callable, Optional
 from bilibili_api.live import LiveDanmaku, LiveRoom
@@ -10,19 +12,31 @@ from bilibili_api import Danmaku, Credential
 
 CREDENTIAL_FILE = "credential.json"
 ROOMS_FILE = "rooms.json"
+_rooms_file_lock = threading.Lock()
 
 
 def save_room(url: str, name: str = None):
-    rooms = load_rooms()
-    for room in rooms:
-        if room["url"] == url:
-            if name:
-                room["name"] = name
-            break
-    else:
-        rooms.append({"url": url, "name": name or url})
-    with open(ROOMS_FILE, 'w') as f:
-        json.dump(rooms, f, ensure_ascii=False, indent=2)
+    with _rooms_file_lock:
+        rooms = load_rooms()
+        for room in rooms:
+            if room["url"] == url:
+                if name:
+                    room["name"] = name
+                break
+        else:
+            rooms.append({"url": url, "name": name or url})
+        fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(ROOMS_FILE)), suffix='.tmp')
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                json.dump(rooms, f, ensure_ascii=False, indent=2)
+            if os.path.exists(ROOMS_FILE):
+                os.replace(temp_path, ROOMS_FILE)
+            else:
+                os.rename(temp_path, ROOMS_FILE)
+        except Exception:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            raise
 
 
 def load_rooms() -> list:
@@ -115,6 +129,7 @@ class BiliClient:
         room_info = await self.room.get_room_info()
         real_room_id = room_info['room_info']['room_id']
         room_title = room_info['room_info']['title']
+        uname = room_info['anchor_info']['base_info']['uname']
         
         self.danmaku = LiveDanmaku(room_display_id=real_room_id, credential=self.credential)
 
@@ -125,10 +140,11 @@ class BiliClient:
             msg = info[1]
             self.msg_queue.put(("danmaku", uname, msg))
 
-        await self.danmaku.connect()
+        self.msg_queue.put(("room_info", real_room_id, room_title, uname))
+        self.msg_queue.put(("log", f"已連接: {uname} - {room_title}"))
         self.connected = True
-        self.msg_queue.put(("room_info", real_room_id, room_title))
-        self.msg_queue.put(("log", f"已連接: {room_title}"))
+        
+        await self.danmaku.connect()
         return real_room_id
 
     async def _send_danmaku(self, text: str) -> bool:

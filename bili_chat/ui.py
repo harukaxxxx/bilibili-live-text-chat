@@ -166,12 +166,17 @@ class BiliChatUI:
                 self.qr_dialog.set_failed()
             self.qr_dialog = None
 
-    def update_rooms(self, rooms: list):
+    def update_rooms(self, rooms: list, current_url: str = None):
         self.rooms = rooms
         self.url_map = {f"{r['name']} ({r['url']})": r['url'] for r in rooms}
         display_names = list(self.url_map.keys())
         self.room_combo.configure(values=display_names)
-        if display_names:
+        if current_url:
+            for name, url in self.url_map.items():
+                if url == current_url:
+                    self.room_combo.set(name)
+                    break
+        elif display_names:
             self.room_combo.set(display_names[0])
 
     def run(self):

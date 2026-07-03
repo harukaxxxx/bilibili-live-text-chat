@@ -33,7 +33,7 @@ class App:
         self.current_url = url
         save_room(url)
         self.rooms = load_rooms()
-        self.ui.update_rooms(self.rooms)
+        self.ui.update_rooms(self.rooms, url)
         
         has_credential = self.client.load_credential()
         if has_credential:
@@ -71,11 +71,11 @@ class App:
                 success = args[0]
                 self.ui.qr_login_done(success)
             elif msg_type == "room_info":
-                room_id, room_title = args
+                room_id, room_title, uname = args
                 if self.current_url:
-                    save_room(self.current_url, room_title)
+                    save_room(self.current_url, uname)
                     self.rooms = load_rooms()
-                    self.ui.update_rooms(self.rooms)
+                    self.ui.update_rooms(self.rooms, self.current_url)
         
         if self.client.connected:
             self.ui.set_connected(True)
