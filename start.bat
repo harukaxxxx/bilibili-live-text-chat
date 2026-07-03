@@ -1,1 +1,2 @@
-@start /b "" uv run pythonw run.pyw
+@echo off
+start /b "" uv run pythonw run.pyw

@@ -38,10 +38,12 @@ class QRCodeDialog(ctk.CTkToplevel):
 
 
 class BiliChatUI:
-    def __init__(self, on_connect: Callable, on_send: Callable, on_disconnect: Callable):
+    def __init__(self, on_connect: Callable, on_send: Callable, on_disconnect: Callable, rooms: list = None):
         self.on_connect = on_connect
         self.on_send = on_send
         self.on_disconnect = on_disconnect
+        self.rooms = rooms or []
+        self.url_map = {f"{r['name']} ({r['url']})": r['url'] for r in self.rooms}
         
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
@@ -63,10 +65,18 @@ class BiliChatUI:
         
         ctk.CTkLabel(top_frame, text="直播間:").grid(row=0, column=0, padx=(0, 5))
         
-        self.url_entry = ctk.CTkEntry(top_frame, placeholder_text="https://live.bilibili.com/10971399")
-        self.url_entry.grid(row=0, column=1, padx=(0, 5), sticky="ew")
-        self.url_entry.insert(0, "https://live.bilibili.com/10971399")
-        self.url_entry.bind("<Return>", lambda e: self._on_connect_click())
+        display_names = list(self.url_map.keys())
+        self.room_combo = ctk.CTkComboBox(
+            top_frame,
+            values=display_names,
+            width=250
+        )
+        self.room_combo.grid(row=0, column=1, padx=(0, 5), sticky="ew")
+        if display_names:
+            self.room_combo.set(display_names[0])
+        else:
+            self.room_combo.set("https://live.bilibili.com/")
+        self.room_combo.bind("<Return>", lambda e: self._on_connect_click())
         
         self.connect_btn = ctk.CTkButton(top_frame, text="連接", width=70, command=self._on_connect_click)
         self.connect_btn.grid(row=0, column=2)
@@ -96,8 +106,14 @@ class BiliChatUI:
         self.send_btn = ctk.CTkButton(bottom_frame, text="發送", width=70, command=self._on_send_click, state="disabled")
         self.send_btn.grid(row=0, column=1)
 
+    def _get_url_from_input(self) -> str:
+        text = self.room_combo.get().strip()
+        if text in self.url_map:
+            return self.url_map[text]
+        return text
+
     def _on_connect_click(self):
-        url = self.url_entry.get().strip()
+        url = self._get_url_from_input()
         if not url:
             return
         self.on_connect(url)
@@ -125,11 +141,11 @@ class BiliChatUI:
         if connected:
             self.connect_btn.configure(text="斷開", command=self._on_disconnect_click)
             self.send_btn.configure(state="normal")
-            self.url_entry.configure(state="disabled")
+            self.room_combo.configure(state="disabled")
         else:
             self.connect_btn.configure(text="連接", command=self._on_connect_click)
             self.send_btn.configure(state="disabled")
-            self.url_entry.configure(state="normal")
+            self.room_combo.configure(state="normal")
 
     def _on_disconnect_click(self):
         self.on_disconnect()
@@ -149,6 +165,14 @@ class BiliChatUI:
             else:
                 self.qr_dialog.set_failed()
             self.qr_dialog = None
+
+    def update_rooms(self, rooms: list):
+        self.rooms = rooms
+        self.url_map = {f"{r['name']} ({r['url']})": r['url'] for r in rooms}
+        display_names = list(self.url_map.keys())
+        self.room_combo.configure(values=display_names)
+        if display_names:
+            self.room_combo.set(display_names[0])
 
     def run(self):
         self.root.mainloop()

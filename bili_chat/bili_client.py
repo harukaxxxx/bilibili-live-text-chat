@@ -9,6 +9,30 @@ from bilibili_api import Danmaku, Credential
 
 
 CREDENTIAL_FILE = "credential.json"
+ROOMS_FILE = "rooms.json"
+
+
+def save_room(url: str, name: str = None):
+    rooms = load_rooms()
+    for room in rooms:
+        if room["url"] == url:
+            if name:
+                room["name"] = name
+            break
+    else:
+        rooms.append({"url": url, "name": name or url})
+    with open(ROOMS_FILE, 'w') as f:
+        json.dump(rooms, f, ensure_ascii=False, indent=2)
+
+
+def load_rooms() -> list:
+    if not os.path.exists(ROOMS_FILE):
+        return []
+    try:
+        with open(ROOMS_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return []
 
 
 class BiliClient:
@@ -40,6 +64,18 @@ class BiliClient:
                 buvid3=cookies.get('buvid3'),
                 dedeuserid=cookies.get('DedeUserID')
             )
+            return True
+        except Exception:
+            return False
+
+    async def _verify_credential(self) -> bool:
+        """驗證憑證是否有效"""
+        if self.credential is None:
+            return False
+        try:
+            from bilibili_api import user
+            u = user.User(uid=int(self.credential.dedeuserid), credential=self.credential)
+            await u.get_user_info()
             return True
         except Exception:
             return False
@@ -78,6 +114,7 @@ class BiliClient:
         self.room = LiveRoom(room_display_id=room_id, credential=self.credential)
         room_info = await self.room.get_room_info()
         real_room_id = room_info['room_info']['room_id']
+        room_title = room_info['room_info']['title']
         
         self.danmaku = LiveDanmaku(room_display_id=real_room_id, credential=self.credential)
 
@@ -90,7 +127,8 @@ class BiliClient:
 
         await self.danmaku.connect()
         self.connected = True
-        self.msg_queue.put(("log", f"已連接房間 ID: {real_room_id}"))
+        self.msg_queue.put(("room_info", real_room_id, room_title))
+        self.msg_queue.put(("log", f"已連接: {room_title}"))
         return real_room_id
 
     async def _send_danmaku(self, text: str) -> bool:
@@ -113,12 +151,26 @@ class BiliClient:
             
             async def _task():
                 if self.credential is None:
+                    # 沒有憑證，需要登入
                     success = await self._qr_login()
                     if not success:
                         self.msg_queue.put(("error", "登入失敗"))
                         return
                 else:
-                    self.msg_queue.put(("log", "已載入登入憑證"))
+                    # 有憑證，先驗證
+                    self.msg_queue.put(("log", "正在驗證登入憑證..."))
+                    is_valid = await self._verify_credential()
+                    if not is_valid:
+                        self.msg_queue.put(("log", "憑證已失效，需要重新登入"))
+                        self.credential = None
+                        if os.path.exists(CREDENTIAL_FILE):
+                            os.remove(CREDENTIAL_FILE)
+                        success = await self._qr_login()
+                        if not success:
+                            self.msg_queue.put(("error", "登入失敗"))
+                            return
+                    else:
+                        self.msg_queue.put(("log", "憑證驗證成功"))
                 
                 try:
                     await self._connect_room(room_id)
