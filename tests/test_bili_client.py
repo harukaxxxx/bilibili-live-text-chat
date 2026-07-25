@@ -1,3 +1,4 @@
+import asyncio
 import sys
 from types import ModuleType, SimpleNamespace
 
@@ -104,3 +105,34 @@ def test_schedules_a_valid_batch(monkeypatch):
     client.send_messages(["valid"])
 
     assert scheduled == [client._loop]
+
+
+@pytest.mark.asyncio
+async def test_serializes_rapid_batches_with_delays_across_batch_boundary(monkeypatch):
+    client, sent, waits = BiliClient(), [], []
+    client._loop = asyncio.get_running_loop()
+    client.room = object()
+    finished = asyncio.Event()
+    original_sleep = asyncio.sleep
+
+    async def fake_send(text):
+        sent.append(text)
+        if len(sent) == 4:
+            finished.set()
+        return True
+
+    async def fake_sleep(seconds):
+        waits.append(seconds)
+        await original_sleep(0)
+
+    monkeypatch.setattr(client, "_send_danmaku", fake_send)
+    monkeypatch.setattr("bili_chat.bili_client.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("bili_chat.bili_client.random.uniform", lambda low, high: 2.0)
+
+    client.send_messages(["one", "two"])
+    client.send_messages(["three", "four"])
+
+    await asyncio.wait_for(finished.wait(), timeout=1)
+
+    assert sent == ["one", "two", "three", "four"]
+    assert waits == [2.0, 2.0, 2.0]

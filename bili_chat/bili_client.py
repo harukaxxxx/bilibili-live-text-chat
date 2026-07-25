@@ -60,6 +60,9 @@ class BiliClient:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread = None
         self.connected = False
+        self._batch_queue: Optional[asyncio.Queue[list[str]]] = None
+        self._batch_worker: Optional[asyncio.Task[None]] = None
+        self._has_sent_danmaku = False
 
     def save_credential(self):
         if self.credential is None:
@@ -162,14 +165,31 @@ class BiliClient:
 
     async def _send_danmaku_batch(self, segments: list[str]) -> bool:
         for index, segment in enumerate(segments, start=1):
-            if index > 1:
+            if self._has_sent_danmaku:
                 await asyncio.sleep(random.uniform(1.5, 3.0))
             if not await self._send_danmaku(segment):
                 self.msg_queue.put(
                     ("log", f"Danmaku batch stopped at message {index} after a send failure.")
                 )
                 return False
+            self._has_sent_danmaku = True
         return True
+
+    async def _enqueue_danmaku_batch(self, segments: list[str]) -> None:
+        if self._batch_queue is None:
+            self._batch_queue = asyncio.Queue()
+        await self._batch_queue.put(segments)
+        if self._batch_worker is None or self._batch_worker.done():
+            self._batch_worker = asyncio.create_task(self._send_queued_danmaku_batches())
+
+    async def _send_queued_danmaku_batches(self) -> None:
+        while True:
+            assert self._batch_queue is not None
+            segments = await self._batch_queue.get()
+            try:
+                await self._send_danmaku_batch(segments)
+            finally:
+                self._batch_queue.task_done()
 
     def start_login_and_connect(self, room_id: int):
         import threading
@@ -234,7 +254,7 @@ class BiliClient:
             self.msg_queue.put(("log", "Cannot send messages before connecting to a room."))
             return
 
-        asyncio.run_coroutine_threadsafe(self._send_danmaku_batch(segments), self._loop)
+        asyncio.run_coroutine_threadsafe(self._enqueue_danmaku_batch(segments), self._loop)
 
     def disconnect(self):
         if self._loop is not None:
