@@ -44,8 +44,8 @@ class App:
         self.ui.append_log("正在連接...")
         self.client.start_login_and_connect(room_id)
 
-    def on_send(self, msg: str):
-        self.client.send_message(msg)
+    def on_send(self, segments: list[str]):
+        self.client.send_messages(segments)
 
     def on_disconnect(self):
         self.client.disconnect()

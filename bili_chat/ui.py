@@ -3,6 +3,7 @@ import re
 from tkinter import scrolledtext
 from typing import Callable, Optional
 from PIL import Image, ImageTk
+from bili_chat.message_segments import MAX_DANMAKU_LENGTH, segment_lengths, split_segments, validate_segments
 
 
 class QRCodeDialog(ctk.CTkToplevel):
@@ -103,12 +104,50 @@ class BiliChatUI:
         bottom_frame.grid(row=3, column=0, padx=10, pady=(5, 10), sticky="ew")
         bottom_frame.grid_columnconfigure(0, weight=1)
         
-        self.msg_entry = ctk.CTkEntry(bottom_frame, placeholder_text="輸入訊息...")
+        self.msg_entry = ctk.CTkTextbox(bottom_frame, height=70, font=("Microsoft JhengHei UI", 12))
         self.msg_entry.grid(row=0, column=0, padx=(0, 5), sticky="ew")
-        self.msg_entry.bind("<Return>", lambda e: self._on_send_click())
+        self.msg_entry.bind("<Shift-Return>", self._on_shift_return)
+        self.msg_entry.bind("<Return>", self._on_return)
+        self.msg_entry.bind("<KeyRelease>", self._on_message_change)
+
+        self.count_frame = ctk.CTkFrame(bottom_frame, fg_color="transparent")
+        self.count_frame.grid(row=1, column=0, padx=(0, 5), pady=(2, 0), sticky="w")
         
         self.send_btn = ctk.CTkButton(bottom_frame, text="發送", width=70, command=self._on_send_click, state="disabled")
-        self.send_btn.grid(row=0, column=1)
+        self.send_btn.grid(row=0, column=1, rowspan=2)
+
+    def _on_shift_return(self, event):
+        self.msg_entry.insert("insert", "\n")
+        self.root.after_idle(self._update_message_state)
+        return "break"
+
+    def _on_return(self, event):
+        self._on_send_click()
+        return "break"
+
+    def _on_message_change(self, event):
+        self._update_message_state()
+
+    def _update_message_state(self):
+        text = self.msg_entry.get("1.0", "end-1c")
+        lengths = segment_lengths(text)
+        segments = split_segments(text)
+        is_valid, _ = validate_segments(segments)
+
+        for child in self.count_frame.winfo_children():
+            child.destroy()
+        for index, length in enumerate(lengths):
+            if index:
+                ctk.CTkLabel(self.count_frame, text="｜", text_color="gray").grid(row=0, column=index * 2)
+            color = "#e74c3c" if length > MAX_DANMAKU_LENGTH else "gray"
+            ctk.CTkLabel(
+                self.count_frame,
+                text=f"{length}/{MAX_DANMAKU_LENGTH}",
+                text_color=color,
+            ).grid(row=0, column=index * 2 + 1)
+
+        state = "normal" if self._is_connected and segments and is_valid else "disabled"
+        self.send_btn.configure(state=state)
 
     def _get_url_from_input(self) -> str:
         text = self.room_combo.get().strip()
@@ -123,11 +162,14 @@ class BiliChatUI:
         self.on_connect(url)
 
     def _on_send_click(self):
-        msg = self.msg_entry.get().strip()
-        if not msg:
+        text = self.msg_entry.get("1.0", "end-1c")
+        segments = split_segments(text)
+        is_valid, _ = validate_segments(segments)
+        if not segments or not is_valid:
             return
-        self.msg_entry.delete(0, "end")
-        self.on_send(msg)
+        self.on_send(segments)
+        self.msg_entry.delete("1.0", "end")
+        self._update_message_state()
 
     MAX_LINES = 100
 
@@ -162,12 +204,11 @@ class BiliChatUI:
         self._is_connected = connected
         if connected:
             self.connect_btn.configure(text="斷開", command=self._on_disconnect_click)
-            self.send_btn.configure(state="normal")
             self.room_combo.configure(state="disabled")
         else:
             self.connect_btn.configure(text="連接", command=self._on_connect_click)
-            self.send_btn.configure(state="disabled")
             self.room_combo.configure(state="normal")
+        self._update_message_state()
 
     def _on_disconnect_click(self):
         self.on_disconnect()
