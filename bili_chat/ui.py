@@ -165,7 +165,7 @@ class BiliChatUI:
         text = self.msg_entry.get("1.0", "end-1c")
         segments = split_segments(text)
         is_valid, _ = validate_segments(segments)
-        if not segments or not is_valid:
+        if not self._is_connected or not segments or not is_valid:
             return
         self.on_send(segments)
         self.msg_entry.delete("1.0", "end")
