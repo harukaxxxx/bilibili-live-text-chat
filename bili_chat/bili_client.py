@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import random
 import tempfile
 import threading
 from queue import Queue
@@ -8,6 +9,7 @@ from typing import Callable, Optional
 from bilibili_api.live import LiveDanmaku, LiveRoom
 from bilibili_api.login_v2 import QrCodeLogin
 from bilibili_api import Danmaku, Credential
+from bili_chat.message_segments import validate_segments
 
 
 CREDENTIAL_FILE = "credential.json"
@@ -158,6 +160,17 @@ class BiliClient:
             self.msg_queue.put(("log", f"發送失敗: {e}"))
             return False
 
+    async def _send_danmaku_batch(self, segments: list[str]) -> bool:
+        for index, segment in enumerate(segments, start=1):
+            if index > 1:
+                await asyncio.sleep(random.uniform(1.5, 3.0))
+            if not await self._send_danmaku(segment):
+                self.msg_queue.put(
+                    ("log", f"Danmaku batch stopped at message {index} after a send failure.")
+                )
+                return False
+        return True
+
     def start_login_and_connect(self, room_id: int):
         import threading
         
@@ -205,6 +218,23 @@ class BiliClient:
             return
         
         asyncio.run_coroutine_threadsafe(self._send_danmaku(text), self._loop)
+
+    def send_messages(self, segments: list[str]):
+        is_valid, invalid_index = validate_segments(segments)
+        if not is_valid:
+            self.msg_queue.put(
+                (
+                    "log",
+                    f"Danmaku batch was not sent because message {invalid_index} exceeds 40 characters.",
+                )
+            )
+            return
+
+        if self._loop is None or self.room is None:
+            self.msg_queue.put(("log", "Cannot send messages before connecting to a room."))
+            return
+
+        asyncio.run_coroutine_threadsafe(self._send_danmaku_batch(segments), self._loop)
 
     def disconnect(self):
         if self._loop is not None:
