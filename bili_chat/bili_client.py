@@ -62,6 +62,7 @@ class BiliClient:
         self.connected = False
         self._batch_queue: Optional[asyncio.Queue[list[str]]] = None
         self._batch_worker: Optional[asyncio.Task[None]] = None
+        self._batch_loop: Optional[asyncio.AbstractEventLoop] = None
         self._has_sent_danmaku = False
 
     def save_credential(self):
@@ -176,20 +177,28 @@ class BiliClient:
         return True
 
     async def _enqueue_danmaku_batch(self, segments: list[str]) -> None:
-        if self._batch_queue is None:
+        loop = asyncio.get_running_loop()
+        if self._batch_loop is not loop:
             self._batch_queue = asyncio.Queue()
+            self._batch_worker = None
+            self._batch_loop = loop
+            self._has_sent_danmaku = False
+        assert self._batch_queue is not None
         await self._batch_queue.put(segments)
         if self._batch_worker is None or self._batch_worker.done():
-            self._batch_worker = asyncio.create_task(self._send_queued_danmaku_batches())
+            self._batch_worker = asyncio.create_task(
+                self._send_queued_danmaku_batches(self._batch_queue)
+            )
 
-    async def _send_queued_danmaku_batches(self) -> None:
+    async def _send_queued_danmaku_batches(
+        self, queue: asyncio.Queue[list[str]]
+    ) -> None:
         while True:
-            assert self._batch_queue is not None
-            segments = await self._batch_queue.get()
+            segments = await queue.get()
             try:
                 await self._send_danmaku_batch(segments)
             finally:
-                self._batch_queue.task_done()
+                queue.task_done()
 
     def start_login_and_connect(self, room_id: int):
         import threading
@@ -257,6 +266,26 @@ class BiliClient:
         asyncio.run_coroutine_threadsafe(self._enqueue_danmaku_batch(segments), self._loop)
 
     def disconnect(self):
-        if self._loop is not None:
-            self._loop.call_soon_threadsafe(self._loop.stop)
+        loop = self._loop
+        worker = self._batch_worker
+        queue = self._batch_queue
+
+        self.room = None
+        self.danmaku = None
         self.connected = False
+        self._batch_queue = None
+        self._batch_worker = None
+        self._batch_loop = None
+        self._has_sent_danmaku = False
+
+        def cancel_stale_batches():
+            if worker is not None and not worker.done():
+                worker.cancel()
+            if queue is not None:
+                while not queue.empty():
+                    queue.get_nowait()
+                    queue.task_done()
+
+        if loop is not None:
+            loop.call_soon_threadsafe(cancel_stale_batches)
+            loop.call_soon_threadsafe(loop.stop)

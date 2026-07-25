@@ -136,3 +136,50 @@ async def test_serializes_rapid_batches_with_delays_across_batch_boundary(monkey
 
     assert sent == ["one", "two", "three", "four"]
     assert waits == [2.0, 2.0, 2.0]
+
+
+def test_disconnect_reconnect_discards_old_batch_worker_and_creates_a_fresh_one(
+    monkeypatch,
+):
+    client, sent = BiliClient(), []
+    old_loop = asyncio.new_event_loop()
+    new_loop = asyncio.new_event_loop()
+    old_worker = old_loop.create_task(asyncio.sleep(10))
+    client._loop = old_loop
+    client.room = object()
+    client._batch_loop = old_loop
+    client._batch_queue = asyncio.Queue()
+    client._batch_worker = old_worker
+
+    async def fake_send(text):
+        sent.append(text)
+        return True
+
+    monkeypatch.setattr(client, "_send_danmaku", fake_send)
+
+    try:
+        client.disconnect()
+        old_loop.run_forever()
+        old_loop.call_soon(old_loop.stop)
+        old_loop.run_forever()
+
+        assert old_worker.cancelled()
+        assert client._batch_queue is None
+        assert client._batch_worker is None
+
+        client._loop = new_loop
+        client.room = object()
+        client.send_messages(["new"])
+        new_loop.run_until_complete(asyncio.sleep(0))
+        new_loop.run_until_complete(asyncio.sleep(0))
+
+        assert sent == ["new"]
+        assert client._batch_loop is new_loop
+        assert client._batch_worker is not old_worker
+    finally:
+        for loop, worker in ((old_loop, old_worker), (new_loop, client._batch_worker)):
+            if worker is not None and not worker.done():
+                worker.cancel()
+                loop.call_soon(loop.stop)
+                loop.run_forever()
+            loop.close()
