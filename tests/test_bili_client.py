@@ -132,7 +132,7 @@ def test_schedules_a_valid_batch(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_serializes_rapid_batches_with_delays_across_batch_boundary(monkeypatch):
+async def test_serializes_rapid_batches_without_a_delay_at_batch_boundaries(monkeypatch):
     client, sent, waits = BiliClient(), [], []
     client._loop = asyncio.get_running_loop()
     client.room = object()
@@ -159,7 +159,7 @@ async def test_serializes_rapid_batches_with_delays_across_batch_boundary(monkey
     await asyncio.wait_for(finished.wait(), timeout=1)
 
     assert sent == ["one", "two", "three", "four"]
-    assert waits == [2.0, 2.0, 2.0]
+    assert waits == [2.0, 2.0]
 
 
 def test_disconnect_reconnect_discards_old_batch_worker_and_creates_a_fresh_one(

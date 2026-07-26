@@ -63,7 +63,6 @@ class BiliClient:
         self._batch_queue: Optional[asyncio.Queue[list[str]]] = None
         self._batch_worker: Optional[asyncio.Task[None]] = None
         self._batch_loop: Optional[asyncio.AbstractEventLoop] = None
-        self._has_sent_danmaku = False
         self._last_send_was_rate_limited = False
 
     def save_credential(self):
@@ -171,20 +170,18 @@ class BiliClient:
 
     async def _send_danmaku_batch(self, segments: list[str]) -> bool:
         for index, segment in enumerate(segments, start=1):
-            if self._has_sent_danmaku:
+            if index > 1:
                 await asyncio.sleep(random.uniform(5.0, 8.0))
             if not await self._send_danmaku(segment):
                 if self._last_send_was_rate_limited:
                     self.msg_queue.put(("log", "發送過快，等待後重試一次..."))
                     await asyncio.sleep(random.uniform(15.0, 20.0))
                     if await self._send_danmaku(segment):
-                        self._has_sent_danmaku = True
                         continue
                 self.msg_queue.put(
                     ("log", f"Danmaku batch stopped at message {index} after a send failure.")
                 )
                 return False
-            self._has_sent_danmaku = True
         return True
 
     async def _enqueue_danmaku_batch(self, segments: list[str]) -> None:
@@ -193,7 +190,6 @@ class BiliClient:
             self._batch_queue = asyncio.Queue()
             self._batch_worker = None
             self._batch_loop = loop
-            self._has_sent_danmaku = False
         assert self._batch_queue is not None
         await self._batch_queue.put(segments)
         if self._batch_worker is None or self._batch_worker.done():
@@ -287,7 +283,6 @@ class BiliClient:
         self._batch_queue = None
         self._batch_worker = None
         self._batch_loop = None
-        self._has_sent_danmaku = False
 
         def cancel_stale_batches():
             if worker is not None and not worker.done():
