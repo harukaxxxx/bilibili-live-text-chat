@@ -64,6 +64,7 @@ class BiliClient:
         self._batch_worker: Optional[asyncio.Task[None]] = None
         self._batch_loop: Optional[asyncio.AbstractEventLoop] = None
         self._has_sent_danmaku = False
+        self._last_send_was_rate_limited = False
 
     def save_credential(self):
         if self.credential is None:
@@ -156,19 +157,29 @@ class BiliClient:
     async def _send_danmaku(self, text: str) -> bool:
         if self.room is None or self.credential is None:
             return False
+        self._last_send_was_rate_limited = False
         try:
             danmaku = Danmaku(text=text)
             await self.room.send_danmaku(danmaku)
             return True
         except Exception as e:
+            self._last_send_was_rate_limited = (
+                getattr(e, "code", None) == 10031 or "10031" in str(e)
+            )
             self.msg_queue.put(("log", f"發送失敗: {e}"))
             return False
 
     async def _send_danmaku_batch(self, segments: list[str]) -> bool:
         for index, segment in enumerate(segments, start=1):
             if self._has_sent_danmaku:
-                await asyncio.sleep(random.uniform(1.5, 3.0))
+                await asyncio.sleep(random.uniform(5.0, 8.0))
             if not await self._send_danmaku(segment):
+                if self._last_send_was_rate_limited:
+                    self.msg_queue.put(("log", "發送過快，等待後重試一次..."))
+                    await asyncio.sleep(random.uniform(15.0, 20.0))
+                    if await self._send_danmaku(segment):
+                        self._has_sent_danmaku = True
+                        continue
                 self.msg_queue.put(
                     ("log", f"Danmaku batch stopped at message {index} after a send failure.")
                 )

@@ -69,6 +69,30 @@ async def test_stops_after_a_failed_segment_and_logs_its_index(monkeypatch):
     assert logs == [("log", "Danmaku batch stopped at message 2 after a send failure.")]
 
 
+@pytest.mark.asyncio
+async def test_retries_a_rate_limited_message_once_after_a_longer_cooldown(monkeypatch):
+    client, attempts, waits = BiliClient(), [], []
+
+    async def fake_send(text):
+        attempts.append(text)
+        client._last_send_was_rate_limited = len(attempts) == 1
+        return len(attempts) == 2
+
+    async def fake_sleep(seconds):
+        waits.append(seconds)
+
+    monkeypatch.setattr(client, "_send_danmaku", fake_send)
+    monkeypatch.setattr("bili_chat.bili_client.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr(
+        "bili_chat.bili_client.random.uniform",
+        lambda low, high: 16.0,
+    )
+
+    assert await client._send_danmaku_batch(["retry me"])
+    assert attempts == ["retry me", "retry me"]
+    assert waits == [16.0]
+
+
 def test_rejects_invalid_segments_before_scheduling(monkeypatch):
     client, logs, scheduled = BiliClient(), [], []
     client._loop = object()
