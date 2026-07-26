@@ -35,3 +35,7 @@ def test_disconnected_send_does_not_forward_a_valid_batch():
 
     assert forwarded == []
     assert ui.msg_entry.delete_calls == []
+
+
+def test_empty_count_row_reserves_layout_space():
+    assert BiliChatUI.EMPTY_COUNT_PLACEHOLDER == " "

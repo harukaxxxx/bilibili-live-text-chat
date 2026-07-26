@@ -40,6 +40,7 @@ class QRCodeDialog(ctk.CTkToplevel):
 
 class BiliChatUI:
     MAX_LINES = 100
+    EMPTY_COUNT_PLACEHOLDER = " "
 
     def __init__(self, on_connect: Callable, on_send: Callable, on_disconnect: Callable, rooms: list = None):
         self.on_connect = on_connect
@@ -112,9 +113,17 @@ class BiliChatUI:
 
         self.count_frame = ctk.CTkFrame(bottom_frame, fg_color="transparent")
         self.count_frame.grid(row=1, column=0, padx=(0, 5), pady=(2, 0), sticky="w")
+        self._show_empty_count_placeholder()
         
         self.send_btn = ctk.CTkButton(bottom_frame, text="發送", width=70, command=self._on_send_click, state="disabled")
         self.send_btn.grid(row=0, column=1, rowspan=2)
+
+    def _show_empty_count_placeholder(self):
+        ctk.CTkLabel(
+            self.count_frame,
+            text=self.EMPTY_COUNT_PLACEHOLDER,
+            text_color="gray",
+        ).grid(row=0, column=0)
 
     def _on_shift_return(self, event):
         self.msg_entry.insert("insert", "\n")
@@ -136,6 +145,8 @@ class BiliChatUI:
 
         for child in self.count_frame.winfo_children():
             child.destroy()
+        if not lengths:
+            self._show_empty_count_placeholder()
         for index, length in enumerate(lengths):
             if index:
                 ctk.CTkLabel(self.count_frame, text="｜", text_color="gray").grid(row=0, column=index * 2)
