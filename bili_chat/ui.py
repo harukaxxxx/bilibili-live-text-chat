@@ -41,15 +41,34 @@ class QRCodeDialog(ctk.CTkToplevel):
 class BiliChatUI:
     MAX_LINES = 100
     EMPTY_COUNT_PLACEHOLDER = " "
+    EMOTICON_PLACEHOLDER = "選擇房間表情"
+    AUTO_EMOTICON_PLACEHOLDER = "自動回應表情"
+    FAILED_DANMAKU_TAG = "failed_danmaku"
 
-    def __init__(self, on_connect: Callable, on_send: Callable, on_disconnect: Callable, rooms: list = None):
+    def __init__(
+        self,
+        on_connect: Callable,
+        on_send: Callable,
+        on_disconnect: Callable,
+        rooms: list = None,
+        on_send_emoticon: Optional[Callable] = None,
+        on_auto_emoticon: Optional[Callable] = None,
+        on_auto_emoticon_selected: Optional[Callable] = None,
+    ):
         self.on_connect = on_connect
         self.on_send = on_send
         self.on_disconnect = on_disconnect
+        self.on_send_emoticon = on_send_emoticon
+        self.on_auto_emoticon = on_auto_emoticon
+        self.on_auto_emoticon_selected = on_auto_emoticon_selected
         self.rooms = rooms or []
         self.url_map = {f"{r['name']} ({r['url']})": r['url'] for r in self.rooms}
         self._line_count = 0
         self._is_connected = False
+        self._emoticon_map = {}
+        self._selected_emoticon = None
+        self._auto_emoticon_selection = None
+        self._auto_emoticon_enabled = False
         
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
@@ -99,6 +118,11 @@ class BiliChatUI:
             pady=10
         )
         self.chat_display.grid(row=2, column=0, padx=10, pady=5, sticky="nsew")
+        self.chat_display.tag_configure(
+            self.FAILED_DANMAKU_TAG,
+            foreground="#ff5c5c",
+            overstrike=True,
+        )
         self.chat_display.configure(state="disabled")
         
         bottom_frame = ctk.CTkFrame(self.root, fg_color="transparent")
@@ -114,9 +138,38 @@ class BiliChatUI:
         self.count_frame = ctk.CTkFrame(bottom_frame, fg_color="transparent")
         self.count_frame.grid(row=1, column=0, padx=(0, 5), pady=(2, 0), sticky="w")
         self._show_empty_count_placeholder()
+
+        self.emoticon_combo = ctk.CTkComboBox(
+            bottom_frame,
+            values=[self.EMOTICON_PLACEHOLDER],
+            width=180,
+            state="disabled",
+            command=self._on_emoticon_selected,
+        )
+        self.emoticon_combo.grid(row=2, column=0, padx=(0, 5), pady=(4, 0), sticky="w")
+        self.emoticon_combo.set(self.EMOTICON_PLACEHOLDER)
+
+        self.auto_emoticon_combo = ctk.CTkComboBox(
+            bottom_frame,
+            values=[self.AUTO_EMOTICON_PLACEHOLDER],
+            width=180,
+            state="disabled",
+            command=self._on_auto_emoticon_selected,
+        )
+        self.auto_emoticon_combo.grid(row=3, column=0, padx=(0, 5), pady=(4, 0), sticky="w")
+        self.auto_emoticon_combo.set(self.AUTO_EMOTICON_PLACEHOLDER)
+
+        self.auto_emoticon_btn = ctk.CTkButton(
+            bottom_frame,
+            text="自動回應：關",
+            width=100,
+            state="disabled",
+            command=self._toggle_auto_emoticon,
+        )
+        self.auto_emoticon_btn.grid(row=3, column=1, pady=(4, 0))
         
         self.send_btn = ctk.CTkButton(bottom_frame, text="發送", width=70, command=self._on_send_click, state="disabled")
-        self.send_btn.grid(row=0, column=1, rowspan=2)
+        self.send_btn.grid(row=0, column=1, rowspan=3)
 
     def _show_empty_count_placeholder(self):
         ctk.CTkLabel(
@@ -136,6 +189,53 @@ class BiliChatUI:
 
     def _on_message_change(self, event):
         self._update_message_state()
+
+    def _on_emoticon_selected(self, selected: str):
+        emoticon = self._emoticon_map.get(selected)
+        if not emoticon:
+            return
+        current_text = self.msg_entry.get("1.0", "end-1c")
+        self.msg_entry.insert("end", emoticon["display"])
+        self._selected_emoticon = emoticon if not current_text.strip() else None
+        self.emoticon_combo.set(self.EMOTICON_PLACEHOLDER)
+        self._update_message_state()
+
+    def _on_auto_emoticon_selected(self, selected: str):
+        self._auto_emoticon_selection = self._emoticon_map.get(selected)
+        if self.on_auto_emoticon_selected:
+            self.on_auto_emoticon_selected(
+                self._auto_emoticon_selection["unique"]
+                if self._auto_emoticon_selection
+                else None
+            )
+        if self._auto_emoticon_enabled:
+            if self._auto_emoticon_selection:
+                self.on_auto_emoticon(
+                    True,
+                    self._auto_emoticon_selection["unique"],
+                )
+            else:
+                self._auto_emoticon_enabled = False
+                self.on_auto_emoticon(False, None)
+                self.auto_emoticon_btn.configure(text="自動回應：關")
+        self.auto_emoticon_btn.configure(
+            state="normal" if self._is_connected and self._auto_emoticon_selection else "disabled"
+        )
+
+    def _toggle_auto_emoticon(self):
+        if not self._auto_emoticon_selection:
+            return
+
+        self._auto_emoticon_enabled = not self._auto_emoticon_enabled
+        if self._auto_emoticon_enabled:
+            self.on_auto_emoticon(
+                True,
+                self._auto_emoticon_selection["unique"],
+            )
+            self.auto_emoticon_btn.configure(text="自動回應：開")
+        else:
+            self.on_auto_emoticon(False, None)
+            self.auto_emoticon_btn.configure(text="自動回應：關")
 
     def _update_message_state(self):
         text = self.msg_entry.get("1.0", "end-1c")
@@ -178,7 +278,17 @@ class BiliChatUI:
         is_valid, _ = validate_segments(segments)
         if not self._is_connected or not segments or not is_valid:
             return
-        self.on_send(segments)
+        selected = self._selected_emoticon
+        if (
+            selected
+            and self.on_send_emoticon
+            and len(segments) == 1
+            and segments[0].strip() == selected["display"]
+        ):
+            self.on_send_emoticon(selected["unique"])
+        else:
+            self.on_send(segments)
+        self._selected_emoticon = None
         self.msg_entry.delete("1.0", "end")
         self._update_message_state()
 
@@ -193,6 +303,18 @@ class BiliChatUI:
     def append_danmaku(self, uname: str, msg: str):
         self.chat_display.configure(state="normal")
         self.chat_display.insert("end", f"[{uname}]: {msg}\n")
+        self._line_count += 1
+        if self._line_count > self.MAX_LINES:
+            self._trim_display()
+        self.chat_display.configure(state="disabled")
+
+    def append_failed_danmaku(self, msg: str):
+        self.chat_display.configure(state="normal")
+        self.chat_display.insert(
+            "end",
+            f"[我][發送失敗] {msg}\n",
+            self.FAILED_DANMAKU_TAG,
+        )
         self._line_count += 1
         if self._line_count > self.MAX_LINES:
             self._trim_display()
@@ -219,6 +341,15 @@ class BiliChatUI:
         else:
             self.connect_btn.configure(text="連接", command=self._on_connect_click)
             self.room_combo.configure(state="normal")
+        self.emoticon_combo.configure(
+            state="normal" if connected and self._emoticon_map else "disabled"
+        )
+        self.auto_emoticon_combo.configure(
+            state="normal" if connected and self._emoticon_map else "disabled"
+        )
+        self.auto_emoticon_btn.configure(
+            state="normal" if connected and self._auto_emoticon_selection else "disabled"
+        )
         self._update_message_state()
 
     def _on_disconnect_click(self):
@@ -252,6 +383,51 @@ class BiliChatUI:
                     break
         elif display_names:
             self.room_combo.set(display_names[0])
+
+    def update_emoticons(
+        self, emoticons: list[dict], selected_unique: Optional[str] = None
+    ):
+        self._emoticon_map = {
+            emoticon["display"]: emoticon
+            for emoticon in emoticons
+            if emoticon.get("emoji") and emoticon.get("text")
+        }
+        self._selected_emoticon = None
+        if self._auto_emoticon_enabled:
+            if self.on_auto_emoticon:
+                self.on_auto_emoticon(False, None)
+        self._auto_emoticon_selection = next(
+            (
+                emoticon
+                for emoticon in self._emoticon_map.values()
+                if emoticon.get("unique") == selected_unique
+            ),
+            None,
+        )
+        self._auto_emoticon_enabled = False
+        values = [self.EMOTICON_PLACEHOLDER, *self._emoticon_map.keys()]
+        self.emoticon_combo.configure(
+            values=values,
+            state="normal" if self._is_connected and self._emoticon_map else "disabled",
+        )
+        self.emoticon_combo.set(self.EMOTICON_PLACEHOLDER)
+        self.auto_emoticon_combo.configure(
+            values=[self.AUTO_EMOTICON_PLACEHOLDER, *self._emoticon_map.keys()],
+            state="normal" if self._is_connected and self._emoticon_map else "disabled",
+        )
+        self.auto_emoticon_combo.set(
+            self._auto_emoticon_selection["display"]
+            if self._auto_emoticon_selection
+            else self.AUTO_EMOTICON_PLACEHOLDER
+        )
+        self.auto_emoticon_btn.configure(
+            text="自動回應：關",
+            state=(
+                "normal"
+                if self._is_connected and self._auto_emoticon_selection
+                else "disabled"
+            ),
+        )
 
     def run(self):
         self.root.mainloop()

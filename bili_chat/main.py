@@ -1,6 +1,12 @@
 import re
 import threading
-from bili_chat.bili_client import BiliClient, save_room, load_rooms
+from bili_chat.bili_client import (
+    BiliClient,
+    load_auto_emoticon_preferences,
+    load_rooms,
+    save_auto_emoticon_preference,
+    save_room,
+)
 from bili_chat.ui import BiliChatUI
 
 
@@ -8,10 +14,15 @@ class App:
     def __init__(self):
         self.client = BiliClient()
         self.rooms = load_rooms()
+        self.auto_emoticon_preferences = load_auto_emoticon_preferences()
         self.current_url = None
+        self.current_room_id = None
         self.ui = BiliChatUI(
             on_connect=self.on_connect,
             on_send=self.on_send,
+            on_send_emoticon=self.on_send_emoticon,
+            on_auto_emoticon=self.on_auto_emoticon,
+            on_auto_emoticon_selected=self.on_auto_emoticon_selected,
             on_disconnect=self.on_disconnect,
             rooms=self.rooms
         )
@@ -31,6 +42,8 @@ class App:
             return
         
         self.current_url = url
+        self.current_room_id = None
+        self.ui.update_emoticons([])
         save_room(url)
         self.rooms = load_rooms()
         self.ui.update_rooms(self.rooms, url)
@@ -47,8 +60,26 @@ class App:
     def on_send(self, segments: list[str]):
         self.client.send_messages(segments)
 
+    def on_send_emoticon(self, unique: str):
+        self.client.send_emoticon(unique)
+
+    def on_auto_emoticon(self, enabled: bool, unique: str = None):
+        self.client.configure_auto_emoticon(enabled, unique)
+
+    def on_auto_emoticon_selected(self, unique: str = None):
+        if self.current_room_id is None:
+            return
+        save_auto_emoticon_preference(self.current_room_id, unique)
+        room_key = str(self.current_room_id)
+        if unique:
+            self.auto_emoticon_preferences[room_key] = unique
+        else:
+            self.auto_emoticon_preferences.pop(room_key, None)
+
     def on_disconnect(self):
         self.client.disconnect()
+        self.current_room_id = None
+        self.ui.update_emoticons([])
         self.ui.append_log("已斷開連接")
 
     def _poll_messages(self):
@@ -60,6 +91,8 @@ class App:
             if msg_type == "danmaku":
                 uname, msg = args
                 self.ui.append_danmaku(uname, msg)
+            elif msg_type == "send_failed":
+                self.ui.append_failed_danmaku(args[0])
             elif msg_type == "log":
                 text = args[0]
                 self.ui.append_log(text)
@@ -74,10 +107,18 @@ class App:
                 self.ui.qr_login_done(success)
             elif msg_type == "room_info":
                 room_id, room_title, uname = args
+                self.current_room_id = room_id
                 if self.current_url:
                     save_room(self.current_url, uname)
                     self.rooms = load_rooms()
                     self.ui.update_rooms(self.rooms, self.current_url)
+            elif msg_type == "room_emoticons":
+                selected_unique = (
+                    self.auto_emoticon_preferences.get(str(self.current_room_id))
+                    if self.current_room_id is not None
+                    else None
+                )
+                self.ui.update_emoticons(args[0], selected_unique=selected_unique)
         
         if has_update:
             self.ui.scroll_to_end()

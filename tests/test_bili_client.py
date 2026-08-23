@@ -22,7 +22,219 @@ if "bilibili_api" not in sys.modules:
         }
     )
 
-from bili_chat.bili_client import BiliClient
+from bili_chat.bili_client import BiliClient, parse_room_emoticons
+
+
+def test_parse_room_emoticons_keeps_sendable_room_emoticons_only():
+    payload = {
+        "code": 0,
+        "data": {
+            "data": [
+                {
+                    "emoticons": [
+                        {
+                            "emoji": "官方表情",
+                            "emoticon_unique": "official_1",
+                            "perm": 1,
+                        },
+                        {
+                            "emoji": "房間表情",
+                            "emoticon_unique": "room_123_456",
+                            "perm": 1,
+                            "url": "https://example.com/emote.png",
+                        },
+                        {
+                            "emoji": "鎖定表情",
+                            "emoticon_unique": "room_123_789",
+                            "perm": 0,
+                        },
+                        {
+                            "emoji": "房間表情",
+                            "emoticon_unique": "room_123_999",
+                            "perm": 1,
+                        },
+                    ]
+                }
+            ]
+        },
+    }
+
+    assert parse_room_emoticons(payload) == [
+        {
+            "text": "房間表情",
+            "emoji": "房間表情",
+            "display": "<房間表情>",
+            "unique": "room_123_456",
+            "url": "https://example.com/emote.png",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_room_emoticon_request_uses_browser_headers(monkeypatch):
+    request = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"code": 0, "data": {"data": []}}
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            request["client_kwargs"] = kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return None
+
+        async def get(self, url, **kwargs):
+            request["url"] = url
+            request.update(kwargs)
+            return FakeResponse()
+
+    monkeypatch.setattr("bili_chat.bili_client.httpx.AsyncClient", FakeClient)
+
+    client = BiliClient()
+    client.credential = SimpleNamespace(get_cookies=lambda: {"SESSDATA": "secret"})
+
+    assert await client._get_room_emoticons(10971399) == []
+    assert request["headers"]["User-Agent"].startswith("Mozilla/")
+    assert request["headers"]["Referer"] == "https://live.bilibili.com/10971399"
+    assert request["headers"]["Origin"] == "https://live.bilibili.com"
+
+
+@pytest.mark.asyncio
+async def test_send_room_emoticon_uses_emoticon_payload(monkeypatch):
+    request = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"code": 0, "data": {}}
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            request["client_kwargs"] = kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return None
+
+        async def post(self, url, **kwargs):
+            request["url"] = url
+            request.update(kwargs)
+            return FakeResponse()
+
+    monkeypatch.setattr("bili_chat.bili_client.httpx.AsyncClient", FakeClient)
+
+    client = BiliClient()
+    client.room = object()
+    client._real_room_id = 10971399
+    client.credential = SimpleNamespace(
+        get_cookies=lambda: {"bili_jct": "csrf", "SESSDATA": "session"}
+    )
+
+    result = await client._send_emoticon("room_10971399_123")
+    assert result, client.msg_queue.get_nowait()
+    assert request["data"]["msg"] == "room_10971399_123"
+    assert request["data"]["dm_type"] == "1"
+    assert request["data"]["emoticon_options"] == "{}"
+
+
+@pytest.mark.asyncio
+async def test_send_danmaku_converts_traditional_chinese_before_sending(monkeypatch):
+    sent = []
+
+    class FakeDanmaku:
+        def __init__(self, *, text):
+            self.text = text
+
+    async def fake_send_danmaku(danmaku):
+        sent.append(danmaku.text)
+
+    client = BiliClient()
+    client.room = SimpleNamespace(send_danmaku=fake_send_danmaku)
+    client.credential = object()
+    monkeypatch.setattr("bili_chat.bili_client.Danmaku", FakeDanmaku)
+
+    assert await client._send_danmaku("繁體中文、電腦與網路")
+    assert sent == ["繁体中文、电脑与网络"]
+
+
+@pytest.mark.asyncio
+async def test_auto_gift_response_deduplicates_each_user_for_thirty_seconds(monkeypatch):
+    client = BiliClient()
+    client._auto_emoticon_enabled = True
+    client._auto_emoticon_unique = "room_10971399_123"
+    sent = []
+
+    async def fake_send(unique):
+        sent.append(unique)
+        return True
+
+    monkeypatch.setattr(client, "_send_emoticon", fake_send)
+    now = iter([100.0, 110.0, 161.0])
+    client._monotonic = lambda: next(now)
+
+    gift = {"uid": 42, "uname": "viewer", "coin_type": "gold", "total_coin": 1100}
+    await client._handle_auto_gift_response(gift)
+    await client._handle_auto_gift_response(gift)
+    await client._handle_auto_gift_response(gift)
+
+    assert sent == ["room_10971399_123", "room_10971399_123"]
+
+
+@pytest.mark.asyncio
+async def test_auto_gift_response_ignores_the_logged_in_user(monkeypatch):
+    client = BiliClient()
+    client.credential = SimpleNamespace(dedeuserid="42")
+    client._auto_emoticon_enabled = True
+    client._auto_emoticon_unique = "room_10971399_123"
+    sent = []
+
+    async def fake_send(unique):
+        sent.append(unique)
+        return True
+
+    monkeypatch.setattr(client, "_send_emoticon", fake_send)
+
+    await client._handle_auto_gift_response(
+        {"uid": 42, "uname": "me", "coin_type": "gold", "total_coin": 1100}
+    )
+
+    assert sent == []
+    assert client._gift_response_times == {}
+
+
+@pytest.mark.asyncio
+async def test_auto_gift_response_requires_more_than_ten_batteries(monkeypatch):
+    client = BiliClient()
+    client._auto_emoticon_enabled = True
+    client._auto_emoticon_unique = "room_10971399_123"
+    sent = []
+
+    async def fake_send(unique):
+        sent.append(unique)
+        return True
+
+    monkeypatch.setattr(client, "_send_emoticon", fake_send)
+
+    await client._handle_auto_gift_response(
+        {"uid": 42, "coin_type": "gold", "total_coin": 1000}
+    )
+    await client._handle_auto_gift_response(
+        {"uid": 43, "coin_type": "gold", "total_coin": 1001}
+    )
+
+    assert sent == ["room_10971399_123"]
 
 
 @pytest.mark.asyncio
@@ -66,7 +278,10 @@ async def test_stops_after_a_failed_segment_and_logs_its_index(monkeypatch):
 
     assert not await client._send_danmaku_batch(["first", "fail", "never"])
     assert sent == ["first", "fail"]
-    assert logs == [("log", "Danmaku batch stopped at message 2 after a send failure.")]
+    assert logs == [
+        ("send_failed", "fail"),
+        ("log", "Danmaku batch stopped at message 2 after a send failure."),
+    ]
 
 
 @pytest.mark.asyncio
