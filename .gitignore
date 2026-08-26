@@ -14,3 +14,4 @@ wheels/
 # Credentials and user data
 credential.json
 rooms.json
+auto_emoticons.json

@@ -9,6 +9,7 @@ dependencies = [
     "bilibili-api-python>=17.4.2",
     "customtkinter>=6.0.0",
     "httpx>=0.28.1",
+    "opencc-python-reimplemented>=0.1.7",
 ]
 
 [project.scripts]
